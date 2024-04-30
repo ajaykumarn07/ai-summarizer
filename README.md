@@ -9,4 +9,5 @@ Currently, two official plugins are available:
 
 Dipendencies [npm install @reduxjs/toolkit]
              [npm install react-redux]
-deployed link - [https://akn-openai-articlesummarizer.netlify.app/]
+             
+# Deployed Web-site Link - [https://akn-openai-articlesummarizer.netlify.app/]
