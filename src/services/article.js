@@ -5,7 +5,10 @@
  * then summarizes using Google Gemini Flash API.
  */
 
-const RAPID_API_KEY = import.meta.env.VITE_RAPID_API_ARTICLE_KEY || "";
+const RAPID_API_KEY =
+  import.meta.env.VITE_RAPID_API_KEY ||
+  import.meta.env.VITE_RAPID_API_ARTICLE_KEY ||
+  "";
 const GEMINI_API_KEY_ENV = import.meta.env.VITE_GEMINI_API_KEY || "";
 const GEMINI_MODELS = [
   "gemini-3.5-flash-lite",
@@ -64,6 +67,7 @@ export const extractArticleContent = async (url) => {
   }
 
   const articleUrl = parsedUrl.href;
+  const extractionFailures = [];
 
   // Strategy 1: RapidAPI Extract (if key is present - handles modern bot mitigation well)
   if (RAPID_API_KEY) {
@@ -85,7 +89,7 @@ export const extractArticleContent = async (url) => {
         const content = data.md || data.content || data.description;
         const title = data.title || "Article Summary";
 
-        if (content && !isBotChallenge(title, content)) {
+        if (typeof content === "string" && content.trim() && !isBotChallenge(title, content)) {
           return {
             title,
             description: data.description || "",
@@ -93,9 +97,13 @@ export const extractArticleContent = async (url) => {
             url: articleUrl,
           };
         }
+        extractionFailures.push("RapidAPI returned no readable article content.");
+      } else {
+        extractionFailures.push(`RapidAPI returned HTTP ${res.status}.`);
       }
     } catch (rapidErr) {
       console.warn("RapidAPI extract attempt failed:", rapidErr);
+      extractionFailures.push("RapidAPI request failed.");
     }
   }
 
@@ -108,27 +116,60 @@ export const extractArticleContent = async (url) => {
     });
 
     if (res.ok) {
-      const json = await res.json();
-      const content = json?.data?.content || "";
-      const title = json?.data?.title || "Article Summary";
+      const responseText = await res.text();
+      const contentType = res.headers.get("content-type") || "";
+      let json;
 
-      if (content && !isBotChallenge(title, content)) {
+      if (contentType.includes("application/json")) {
+        try {
+          json = JSON.parse(responseText);
+        } catch {
+          throw new Error("Jina Reader returned invalid JSON.");
+        }
+      } else {
+        try {
+          json = JSON.parse(responseText);
+        } catch {
+          json = null;
+        }
+      }
+
+      const data = json?.data || json;
+      const content =
+        typeof data?.content === "string"
+          ? data.content
+          : typeof data?.md === "string"
+            ? data.md
+            : typeof json === "string"
+              ? json
+              : json
+                ? ""
+                : responseText;
+      const title = data?.title || "Article Summary";
+
+      if (content.trim() && !isBotChallenge(title, content)) {
         return {
           title,
-          description: json?.data?.description || "",
+          description: data?.description || "",
           content,
           url: articleUrl,
         };
       }
+      extractionFailures.push(
+        json?.message || json?.error?.message || "Jina Reader returned no readable article content."
+      );
     } else {
-      console.warn(`Jina Reader returned HTTP ${res.status}.`);
+      extractionFailures.push(`Jina Reader returned HTTP ${res.status}.`);
     }
   } catch (jinaErr) {
     console.warn("Jina Reader extraction failed:", jinaErr);
+    extractionFailures.push(jinaErr.message || "Jina Reader request failed.");
   }
 
   throw new Error(
-    "This website blocked automated reading (e.g. Cloudflare or paywall protection). You can switch to the 'Paste Text' tab to summarize its contents directly!"
+    `Could not extract this article. The site may block automated reading, or an extractor may be unavailable. ${
+      extractionFailures.join(" ")
+    } You can switch to the 'Paste Text' tab to summarize its contents directly.`
   );
 };
 
